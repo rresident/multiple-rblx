@@ -1,0 +1,54 @@
+[package]
+name = "multiple-rblx"
+version = "1.0.0"
+edition = "2024"
+build = "build.rs"
+description = "Run multiple Roblox accounts at the same time"
+license = "MIT"
+repository = "https://github.com/rresident/multiple-rblx"
+readme = "README.md"
+keywords = ["roblox", "windows", "gpui"]
+categories = ["gui"]
+publish = false
+
+[dependencies]
+anyhow = "1"
+async-channel = "2"
+gpui = "0.2.2"
+raw-window-handle = "0.6"
+secrecy = "0.10.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3.54", features = ["local-offset"] }
+tracing = "0.1.41"
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+ureq = { version = "3.3", features = ["json"] }
+url = "2"
+webview2-com = "0.39.1"
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Security_Credentials",
+    "Win32_System_Com",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[build-dependencies]
+winresource = "0.1"
+
+[package.metadata.winresource]
+FileDescription = "Multiple Roblox"
+ProductName = "Multiple Roblox"
+OriginalFilename = "multiple-rblx.exe"
+

@@ -1,0 +1,13 @@
+/target
+
+# editors
+/.vscode
+/.idea
+*.iml
+
+# windows
+Thumbs.db
+desktop.ini
+
+# stray build output
+*.pdb
