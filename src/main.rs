@@ -16,6 +16,7 @@ mod security;
 mod settings;
 mod theme;
 mod tray;
+mod update;
 
 fn main() {
     let diagnostics = diagnostics::init();

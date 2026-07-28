@@ -29,7 +29,7 @@ use crate::{
 pub(crate) use text_input::bind_keys as bind_input_keys;
 
 use game_picker::GamePicker;
-use settings_dialog::SettingsSection;
+use settings_dialog::{SettingsSection, UpdateState};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LaunchIntent {
@@ -82,6 +82,7 @@ pub(crate) struct Dashboard {
     link_secondary_focus: FocusHandle,
     focus_modal_on_next_frame: bool,
     focus_link_on_next_frame: bool,
+    update_state: UpdateState,
 }
 
 impl Dashboard {
@@ -209,6 +210,7 @@ impl Dashboard {
             link_secondary_focus: cx.focus_handle().tab_stop(true),
             focus_modal_on_next_frame: false,
             focus_link_on_next_frame: false,
+            update_state: UpdateState::Idle,
         }
     }
 
