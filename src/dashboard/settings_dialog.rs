@@ -241,7 +241,7 @@ impl Dashboard {
             SettingsSection::General => self.render_general(cx),
             SettingsSection::Appearance => self.render_appearance(cx),
             SettingsSection::Data => self.render_data(cx),
-            SettingsSection::About => render_about(),
+            SettingsSection::About => self.render_about(cx),
         };
 
         div()
@@ -504,7 +504,165 @@ impl Dashboard {
     }
 }
 
-fn render_about() -> AnyElement {
+pub(super) enum UpdateState {
+    Idle,
+    Checking,
+    Current,
+    Available(crate::update::Release),
+    Installing,
+    Failed(SharedString),
+}
+
+impl Dashboard {
+    fn check_for_update(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.update_state,
+            UpdateState::Checking | UpdateState::Installing
+        ) {
+            return;
+        }
+
+        self.update_state = UpdateState::Checking;
+        cx.notify();
+
+        let task =
+            cx.background_spawn(async move { crate::update::check(env!("CARGO_PKG_VERSION")) });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.update_state = match result {
+                    Ok(Some(release)) => UpdateState::Available(release),
+                    Ok(None) => UpdateState::Current,
+                    Err(error) => {
+                        tracing::warn!(reason = %error, "update check failed");
+                        UpdateState::Failed(SharedString::from(error.to_string()))
+                    }
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn install_update(&mut self, cx: &mut Context<Self>) {
+        let UpdateState::Available(release) = &self.update_state else {
+            return;
+        };
+        let url = release.download_url.clone();
+
+        self.update_state = UpdateState::Installing;
+        cx.notify();
+
+        let task = cx.background_spawn(async move {
+            let installed = crate::update::install(&url)?;
+            crate::update::relaunch(&installed)
+        });
+
+        cx.spawn(async move |this, cx| match task.await {
+            Ok(()) => {
+                let _ = cx.update(|cx| cx.quit());
+            }
+            Err(error) => {
+                let _ = this.update(cx, |this, cx| {
+                    tracing::error!(reason = %error, "update could not be installed");
+                    this.update_state = UpdateState::Failed(SharedString::from(error.to_string()));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn render_update_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let busy = matches!(
+            self.update_state,
+            UpdateState::Checking | UpdateState::Installing
+        );
+
+        let status: Option<SharedString> = match &self.update_state {
+            UpdateState::Idle => None,
+            UpdateState::Checking => Some("Checking".into()),
+            UpdateState::Current => Some("You are on the latest version".into()),
+            UpdateState::Available(release) => {
+                Some(format!("Update available ({})", release.version).into())
+            }
+            UpdateState::Installing => Some("Downloading and restarting".into()),
+            UpdateState::Failed(reason) => Some(reason.clone()),
+        };
+
+        let failed = matches!(self.update_state, UpdateState::Failed(_));
+        let updatable = matches!(self.update_state, UpdateState::Available(_));
+
+        div()
+            .mt(px(20.0))
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(rgb(theme().text_primary))
+                            .child("Updates"),
+                    )
+                    .when_some(status, |block, status| {
+                        block.child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(rgb(if failed {
+                                    theme().danger_text
+                                } else {
+                                    theme().text_tertiary
+                                }))
+                                .child(status),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(secondary_button(
+                        "settings-check-update",
+                        if busy { "Working" } else { "Check for updates" },
+                        150.0,
+                        cx.listener(|this, _, _, cx| this.check_for_update(cx)),
+                    ))
+                    .when(updatable, |actions| {
+                        actions.child(secondary_button(
+                            "settings-install-update",
+                            "Update",
+                            92.0,
+                            cx.listener(|this, _, _, cx| this.install_update(cx)),
+                        ))
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn render_about(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(render_about_header())
+            .child(self.render_update_row(cx))
+            .into_any_element()
+    }
+}
+
+fn render_about_header() -> AnyElement {
     div()
         .flex()
         .flex_col()

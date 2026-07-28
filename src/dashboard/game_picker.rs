@@ -889,9 +889,7 @@ impl Dashboard {
                 div()
                     .text_size(px(11.5))
                     .text_color(rgb(theme().text_tertiary))
-                    .child(
-                        "Open the game on roblox.com and copy the address, for example https://www.roblox.com/games/84515722934860/Anime-Expeditions",
-                    ),
+                    .child("Open the game on roblox.com and copy the address"),
             )
             .child(
                 div()
