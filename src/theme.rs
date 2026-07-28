@@ -183,6 +183,8 @@ pub(crate) struct Theme {
 
     pub(crate) disabled_icon: u32,
     pub(crate) search_focus_border: u32,
+    pub(crate) caret: u32,
+    pub(crate) text_selection: u32,
     pub(crate) link_highlight: u32,
     pub(crate) spinner_muted: u32,
 }
@@ -315,6 +317,8 @@ pub(crate) static DARK: Theme = Theme {
 
     disabled_icon: 0x5f646b,
     search_focus_border: 0x6d747d,
+    caret: 0xf3f3f1,
+    text_selection: 0x5b8cff40,
     link_highlight: 0x20242a,
     spinner_muted: 0x9aa6b5,
 };
@@ -447,6 +451,8 @@ pub(crate) static LIGHT: Theme = Theme {
 
     disabled_icon: 0xb0b4bb,
     search_focus_border: 0x9aa0a8,
+    caret: 0x1b1c1e,
+    text_selection: 0x3b7dff33,
     link_highlight: 0xe6ecf5,
     spinner_muted: 0x7a828d,
 };

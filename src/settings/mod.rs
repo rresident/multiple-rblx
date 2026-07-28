@@ -1,4 +1,5 @@
 mod data;
+mod shortcut;
 mod startup;
 mod store;
 
@@ -9,6 +10,9 @@ use crate::theme::ThemeMode;
 
 pub(crate) use data::{
     clear_cached_files, clearable_bytes, delete_everything, format_bytes, stored_account_count,
+};
+pub(crate) use shortcut::{
+    is_enabled as shows_in_start_menu, set_enabled as set_shows_in_start_menu,
 };
 pub(crate) use startup::{
     is_enabled as starts_with_windows, launched_hidden, set_enabled as set_start_with_windows,
@@ -46,6 +50,8 @@ pub(crate) struct Preferences {
     #[serde(default)]
     pub(crate) start_hidden: bool,
     #[serde(default)]
+    pub(crate) show_in_start_menu: bool,
+    #[serde(default)]
     pub(crate) theme: ThemeMode,
     #[serde(default)]
     pub(crate) reduce_motion: bool,
@@ -60,6 +66,7 @@ impl Default for Preferences {
             multiple_instances_enabled: false,
             start_with_windows: false,
             start_hidden: false,
+            show_in_start_menu: false,
             reduce_motion: false,
             theme: ThemeMode::Dark,
             favorites: Vec::new(),

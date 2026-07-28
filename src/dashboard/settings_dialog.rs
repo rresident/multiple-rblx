@@ -90,6 +90,19 @@ impl Dashboard {
         cx.notify();
     }
 
+    fn apply_start_menu_preference(&mut self, cx: &mut Context<Self>) {
+        let enabled = self.preferences.show_in_start_menu;
+        match crate::settings::set_shows_in_start_menu(enabled) {
+            Ok(()) => tracing::info!(enabled, "start menu shortcut updated"),
+            Err(error) => {
+                tracing::error!(reason = %error, "start menu shortcut could not be updated");
+                self.preferences.show_in_start_menu = crate::settings::shows_in_start_menu();
+            }
+        }
+        self.persist_preferences(cx);
+        cx.notify();
+    }
+
     pub(super) fn render_settings_dialog(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(section) = self.settings_section else {
             return div().into_any_element();
@@ -289,6 +302,7 @@ impl Dashboard {
     fn render_general(&self, cx: &mut Context<Self>) -> AnyElement {
         let start_with_windows = self.preferences.start_with_windows;
         let start_hidden = self.preferences.start_hidden;
+        let show_in_start_menu = self.preferences.show_in_start_menu;
         let multi = self.preferences.multiple_instances_enabled;
 
         div()
@@ -316,6 +330,18 @@ impl Dashboard {
                     cx.listener(|this, _, _, cx| {
                         this.preferences.start_hidden = !this.preferences.start_hidden;
                         this.apply_startup_preference(cx);
+                    }),
+                ),
+            )))
+            .child(divided(setting_row(
+                "Show in Start menu",
+                "Adds a shortcut so searching the Start menu finds Multiple Roblox.",
+                toggle_switch(
+                    "setting-start-menu",
+                    show_in_start_menu,
+                    cx.listener(|this, _, _, cx| {
+                        this.preferences.show_in_start_menu = !this.preferences.show_in_start_menu;
+                        this.apply_start_menu_preference(cx);
                     }),
                 ),
             )))

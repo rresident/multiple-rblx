@@ -4,13 +4,14 @@ mod launch_bar;
 mod link_dialog;
 mod remove_dialog;
 mod settings_dialog;
+mod text_input;
 mod titlebar;
 
 use std::sync::Arc;
 
 use gpui::{
-    AppContext, Context, Entity, FocusHandle, Image, Render, SharedString, Window, div, prelude::*,
-    px, rgb,
+    AppContext, Context, Entity, FocusHandle, Focusable as _, Image, Render, SharedString, Window,
+    div, prelude::*, px, rgb,
 };
 
 use crate::{
@@ -24,6 +25,8 @@ use crate::{
     settings::{Preferences, SavedGame, SharedSettings, system_settings},
     theme::theme,
 };
+
+pub(crate) use text_input::bind_keys as bind_input_keys;
 
 use game_picker::GamePicker;
 use settings_dialog::SettingsSection;
@@ -274,7 +277,7 @@ impl Render for Dashboard {
         if self.focus_search_on_next_frame
             && let Some(picker) = self.picker.as_ref()
         {
-            let search_focus = picker.search_focus.clone();
+            let search_focus = picker.search.read(cx).focus_handle(cx);
             window.on_next_frame(move |window, _| window.focus(&search_focus));
             self.focus_search_on_next_frame = false;
         }
