@@ -38,3 +38,19 @@ jobs:
           name: multiple-rblx
           path: target/release/multiple-rblx.exe
           if-no-files-found: error
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc packaging\multiple-rblx.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multiple-rblx-setup
+          path: dist/multiple-rblx-setup.exe
+          if-no-files-found: error
