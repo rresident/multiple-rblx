@@ -9,6 +9,8 @@ use crate::{assets::Assets, dashboard::Dashboard, tray};
 pub(crate) fn run() {
     tracing::info!("starting application event loop");
     Application::new().with_assets(Assets).run(|cx: &mut App| {
+        crate::dashboard::bind_input_keys(cx);
+
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 tracing::info!("last application window closed");

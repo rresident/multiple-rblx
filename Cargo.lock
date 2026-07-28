@@ -3231,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "multiple-rblx"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -3244,6 +3244,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "unicode-segmentation",
  "ureq",
  "url",
  "webview2-com",

@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, Context, CursorStyle, FocusHandle, FontWeight, Image,
-    KeyDownEvent, ObjectFit, ScrollHandle, SharedString, StyledImage, Transformation, deferred,
-    div, img, percentage, prelude::*, px, rgb, rgba, svg,
+    Animation, AnimationExt as _, AnyElement, Context, CursorStyle, Entity, Focusable as _,
+    FontWeight, Image, KeyDownEvent, ObjectFit, ScrollHandle, SharedString, StyledImage,
+    Subscription, Transformation, deferred, div, img, percentage, prelude::*, px, rgb, rgba, svg,
 };
 
 use crate::{games::GameSummary, settings::SavedGame, theme::theme};
@@ -11,6 +11,7 @@ use crate::{games::GameSummary, settings::SavedGame, theme::theme};
 use super::{
     Dashboard, LaunchIntent,
     components::{primary_button, secondary_button},
+    text_input::{TextInput, TextInputEvent},
 };
 
 const DIALOG_WIDTH: f32 = 800.0;
@@ -22,6 +23,7 @@ const THUMBNAIL: f32 = 112.0;
 
 const ICON_CHUNK: usize = 6;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(320);
+const MAX_QUERY_LEN: usize = 96;
 
 pub(super) struct GamePicker {
     pub(super) generation: u64,
@@ -34,8 +36,9 @@ pub(super) struct GamePicker {
     pub(super) favorites_snapshot: Vec<SavedGame>,
     pub(super) recents_snapshot: Vec<SavedGame>,
     pub(super) loading: bool,
-    pub(super) search_focus: FocusHandle,
+    pub(super) search: Entity<TextInput>,
     pub(super) scroll: ScrollHandle,
+    _search_subscription: Subscription,
 }
 
 impl GamePicker {
@@ -129,6 +132,19 @@ impl Dashboard {
     pub(super) fn open_game_picker(&mut self, intent: LaunchIntent, cx: &mut Context<Self>) {
         let generation = self.next_picker_generation();
         let cached = !self.catalogue.is_empty();
+        let search = cx.new(|cx| TextInput::new("Search games", MAX_QUERY_LEN, cx));
+        let subscription = cx.subscribe(&search, |this, input, _: &TextInputEvent, cx| {
+            let text = input.read(cx).text().to_owned();
+            let Some(picker) = this.picker.as_mut() else {
+                return;
+            };
+            if picker.query == text {
+                return;
+            }
+            picker.query = text;
+            this.schedule_search(cx);
+            cx.notify();
+        });
         let picker = GamePicker {
             generation,
             intent,
@@ -140,8 +156,9 @@ impl Dashboard {
             favorites_snapshot: self.preferences.favorites.clone(),
             recents_snapshot: self.preferences.recents.clone(),
             loading: !cached,
-            search_focus: cx.focus_handle().tab_stop(true),
+            search,
             scroll: ScrollHandle::new(),
+            _search_subscription: subscription,
         };
         self.picker = Some(picker);
         self.focus_search_on_next_frame = true;
@@ -305,45 +322,14 @@ impl Dashboard {
         }
     }
 
-    fn picker_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let key = event.keystroke.key.as_str();
-        match key {
-            "escape" => {
-                self.close_game_picker(cx);
-                return;
-            }
-            "enter" => {
-                self.launch_selected(cx);
-                return;
-            }
-            "backspace" => {
-                if let Some(picker) = self.picker.as_mut() {
-                    picker.query.pop();
-                }
-            }
-            _ => {
-                if event.keystroke.modifiers.control || event.keystroke.modifiers.alt {
-                    return;
-                }
-                let text = match event.keystroke.key_char.as_deref() {
-                    Some(text) => text,
-                    None if key == "space" => " ",
-                    None => return,
-                };
-                if text.chars().any(char::is_control) {
-                    return;
-                }
-                if let Some(picker) = self.picker.as_mut() {
-                    if picker.query.chars().count() >= 96 {
-                        return;
-                    }
-                    picker.query.push_str(text);
-                }
-            }
+    fn picker_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        match event.keystroke.key.as_str() {
+            "escape" => self.close_game_picker(cx),
+            "enter" => self.launch_selected(cx),
+            _ => return false,
         }
-
-        self.schedule_search(cx);
         cx.notify();
+        true
     }
 
     fn schedule_search(&mut self, cx: &mut Context<Self>) {
@@ -352,6 +338,7 @@ impl Dashboard {
         };
         let generation = picker.generation;
         let query = picker.query.trim().to_owned();
+        let search_epoch = self.next_search_epoch();
 
         if query.is_empty() {
             if let Some(picker) = self.picker.as_mut() {
@@ -362,7 +349,6 @@ impl Dashboard {
 
         let games = self.games.clone();
         let session = self.browse_session.clone();
-        let search_epoch = self.next_search_epoch();
 
         cx.spawn(async move |this, cx| {
             gpui::Timer::after(SEARCH_DEBOUNCE).await;
@@ -539,8 +525,9 @@ impl Dashboard {
                 .bg(rgba(theme().scrim))
                 .occlude()
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    this.picker_key(event, cx);
-                    cx.stop_propagation();
+                    if this.picker_key(event, cx) {
+                        cx.stop_propagation();
+                    }
                 }))
                 .flex()
                 .items_center()
@@ -595,7 +582,7 @@ impl Dashboard {
         let Some(picker) = self.picker.as_ref() else {
             return div().into_any_element();
         };
-        let is_focused = picker.search_focus.is_focused(window);
+        let is_focused = picker.search.read(cx).focus_handle(cx).is_focused(window);
 
         div()
             .h(px(72.0))
@@ -636,12 +623,13 @@ impl Dashboard {
                     .border_1()
                     .border_color(rgb(theme().border))
                     .bg(rgb(theme().surface))
-                    .track_focus(&picker.search_focus)
-                    .focus(|style| style.border_color(rgb(theme().search_focus_border)))
+                    .when(is_focused, |field| {
+                        field.border_color(rgb(theme().search_focus_border))
+                    })
                     .cursor(CursorStyle::IBeam)
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Some(picker) = this.picker.as_ref() {
-                            window.focus(&picker.search_focus);
+                            window.focus(&picker.search.read(cx).focus_handle(cx));
                             cx.notify();
                         }
                     }))
@@ -661,37 +649,10 @@ impl Dashboard {
                             .flex_1()
                             .min_w(px(0.0))
                             .overflow_hidden()
-                            .whitespace_nowrap()
                             .flex()
                             .items_center()
                             .text_size(px(12.0))
-                            .text_color(rgb(if query.is_empty() {
-                                theme().text_tertiary
-                            } else {
-                                theme().text_primary
-                            }))
-                            .child(if query.is_empty() && !is_focused {
-                                SharedString::from("Search games")
-                            } else {
-                                SharedString::from(query.to_owned())
-                            })
-                            .when(is_focused, |field| {
-                                field.child(
-                                    div()
-                                        .ml(px(1.0))
-                                        .w(px(1.0))
-                                        .h(px(15.0))
-                                        .flex_none()
-                                        .bg(rgb(theme().text_primary))
-                                        .with_animation(
-                                            "search-caret",
-                                            Animation::new(Duration::from_millis(1_060)).repeat(),
-                                            |caret, delta| {
-                                                caret.opacity(if delta < 0.5 { 1.0 } else { 0.0 })
-                                            },
-                                        ),
-                                )
-                            }),
+                            .child(picker.search.clone()),
                     )
                     .when(!query.is_empty(), |bar| {
                         bar.child(
@@ -706,12 +667,13 @@ impl Dashboard {
                                 .text_color(rgb(theme().text_tertiary))
                                 .cursor(CursorStyle::PointingHand)
                                 .hover(|style| style.text_color(rgb(theme().text_primary)))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(picker) = this.picker.as_mut() {
-                                        picker.query.clear();
-                                        picker.results = None;
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Some(picker) = this.picker.as_ref() {
+                                        let search = picker.search.clone();
+                                        let handle = search.read(cx).focus_handle(cx);
+                                        window.focus(&handle);
+                                        search.update(cx, |input, cx| input.clear(cx));
                                     }
-                                    cx.notify();
                                 }))
                                 .child(
                                     svg()
