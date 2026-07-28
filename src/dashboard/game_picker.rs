@@ -889,9 +889,7 @@ impl Dashboard {
                 div()
                     .text_size(px(11.5))
                     .text_color(rgb(theme().text_tertiary))
-                    .child(
-                        "Open the game on roblox.com and copy the address",
-                    ),
+                    .child("Open the game on roblox.com and copy the address"),
             )
             .child(
                 div()
