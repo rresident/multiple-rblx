@@ -24,6 +24,7 @@ const THUMBNAIL: f32 = 112.0;
 const ICON_CHUNK: usize = 6;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(320);
 const MAX_QUERY_LEN: usize = 96;
+const MAX_LOOKUP_LEN: usize = 220;
 
 pub(super) struct GamePicker {
     pub(super) generation: u64,
@@ -38,7 +39,21 @@ pub(super) struct GamePicker {
     pub(super) loading: bool,
     pub(super) search: Entity<TextInput>,
     pub(super) scroll: ScrollHandle,
+    pub(super) lookup: Option<Lookup>,
     _search_subscription: Subscription,
+}
+
+pub(super) struct Lookup {
+    input: Entity<TextInput>,
+    status: LookupStatus,
+    _subscription: Subscription,
+}
+
+enum LookupStatus {
+    Idle,
+    Resolving,
+    Found(GameSummary),
+    Failed(SharedString),
 }
 
 impl GamePicker {
@@ -158,6 +173,7 @@ impl Dashboard {
             loading: !cached,
             search,
             scroll: ScrollHandle::new(),
+            lookup: None,
             _search_subscription: subscription,
         };
         self.picker = Some(picker);
@@ -323,13 +339,143 @@ impl Dashboard {
     }
 
     fn picker_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let awaiting_lookup = self
+            .picker
+            .as_ref()
+            .and_then(|picker| picker.lookup.as_ref())
+            .is_some_and(|lookup| !matches!(lookup.status, LookupStatus::Found(_)));
+
         match event.keystroke.key.as_str() {
             "escape" => self.close_game_picker(cx),
+            "enter" if awaiting_lookup => self.resolve_lookup(cx),
             "enter" => self.launch_selected(cx),
             _ => return false,
         }
         cx.notify();
         true
+    }
+
+    fn open_lookup(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| TextInput::new("Paste a game link or ID", MAX_LOOKUP_LEN, cx));
+        let subscription = cx.subscribe(&input, |this, _, _: &TextInputEvent, cx| {
+            let Some(lookup) = this
+                .picker
+                .as_mut()
+                .and_then(|picker| picker.lookup.as_mut())
+            else {
+                return;
+            };
+            if !matches!(lookup.status, LookupStatus::Idle) {
+                lookup.status = LookupStatus::Idle;
+                cx.notify();
+            }
+        });
+
+        let handle = input.read(cx).focus_handle(cx);
+        if let Some(picker) = self.picker.as_mut() {
+            picker.selected = None;
+            picker.lookup = Some(Lookup {
+                input,
+                status: LookupStatus::Idle,
+                _subscription: subscription,
+            });
+        }
+        window.focus(&handle);
+        cx.notify();
+    }
+
+    fn close_lookup(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let Some(picker) = self.picker.as_mut() else {
+            return;
+        };
+        picker.lookup = None;
+        picker.selected = None;
+        let handle = picker.search.read(cx).focus_handle(cx);
+        window.focus(&handle);
+        cx.notify();
+    }
+
+    fn resolve_lookup(&mut self, cx: &mut Context<Self>) {
+        let Some(picker) = self.picker.as_ref() else {
+            return;
+        };
+        let Some(lookup) = picker.lookup.as_ref() else {
+            return;
+        };
+        if matches!(lookup.status, LookupStatus::Resolving) {
+            return;
+        }
+
+        let generation = picker.generation;
+        let raw = lookup.input.read(cx).text().trim().to_owned();
+        if raw.is_empty() {
+            return;
+        }
+
+        let Some(place_id) = crate::games::parse_place_reference(&raw) else {
+            self.set_lookup_status(
+                LookupStatus::Failed("That is not a Roblox game link or ID".into()),
+                cx,
+            );
+            return;
+        };
+
+        let epoch = self.next_search_epoch();
+        self.set_lookup_status(LookupStatus::Resolving, cx);
+
+        let games = self.games.clone();
+        cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_spawn(async move { games.resolve_place(place_id) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                if this.search_epoch != epoch {
+                    return;
+                }
+                let Some(picker) = this.picker.as_mut() else {
+                    return;
+                };
+                if picker.generation != generation || picker.lookup.is_none() {
+                    return;
+                }
+
+                match found {
+                    Ok(Some(game)) => {
+                        let universe_id = game.universe_id;
+                        picker.selected = Some(game.clone());
+                        if let Some(lookup) = picker.lookup.as_mut() {
+                            lookup.status = LookupStatus::Found(game);
+                        }
+                        cx.notify();
+                        this.load_icons(vec![universe_id], cx);
+                    }
+                    Ok(None) => this.set_lookup_status(
+                        LookupStatus::Failed("No game exists for that link or ID".into()),
+                        cx,
+                    ),
+                    Err(error) => {
+                        tracing::warn!(reason = %error, "place lookup failed");
+                        this.set_lookup_status(
+                            LookupStatus::Failed("Roblox could not be reached".into()),
+                            cx,
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn set_lookup_status(&mut self, status: LookupStatus, cx: &mut Context<Self>) {
+        if let Some(lookup) = self
+            .picker
+            .as_mut()
+            .and_then(|picker| picker.lookup.as_mut())
+        {
+            lookup.status = status;
+        }
+        cx.notify();
     }
 
     fn schedule_search(&mut self, cx: &mut Context<Self>) {
@@ -544,7 +690,9 @@ impl Dashboard {
                         .flex()
                         .flex_col()
                         .child(self.render_picker_header(&query, window, cx))
-                        .child(
+                        .child(if picker.lookup.is_some() {
+                            self.render_lookup(cx)
+                        } else {
                             div()
                                 .id("game-picker-body")
                                 .flex_1()
@@ -564,8 +712,9 @@ impl Dashboard {
                                 .when(!loading && is_empty && !searching, |body| {
                                     body.child(picker_placeholder("Games could not be loaded"))
                                 })
-                                .children(body),
-                        )
+                                .children(body)
+                                .into_any_element()
+                        })
                         .child(self.render_picker_footer(has_selection, cx)),
                 ),
         )
@@ -610,81 +759,252 @@ impl Dashboard {
                             .mt(px(2.0))
                             .text_size(px(11.5))
                             .text_color(rgb(theme().text_tertiary))
-                            .child("Pick a game to launch, or star one to keep it handy."),
+                            .child(if picker.lookup.is_some() {
+                                "Paste the address of a game on roblox.com, or its ID."
+                            } else {
+                                "Pick a game to launch, or star one to keep it handy."
+                            }),
                     ),
             )
             .child(
                 div()
-                    .id("game-search")
-                    .w(px(268.0))
-                    .h(px(34.0))
                     .flex_none()
-                    .rounded(px(9.0))
-                    .border_1()
-                    .border_color(rgb(theme().border))
-                    .bg(rgb(theme().surface))
-                    .when(is_focused, |field| {
-                        field.border_color(rgb(theme().search_focus_border))
-                    })
-                    .cursor(CursorStyle::IBeam)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if let Some(picker) = this.picker.as_ref() {
-                            window.focus(&picker.search.read(cx).focus_handle(cx));
-                            cx.notify();
-                        }
-                    }))
                     .flex()
                     .items_center()
-                    .px(px(11.0))
-                    .gap(px(8.0))
+                    .gap(px(10.0))
+                    .when(picker.lookup.is_none(), |actions| {
+                        actions.child(
+                            div()
+                                .id("game-search")
+                                .w(px(268.0))
+                                .h(px(34.0))
+                                .flex_none()
+                                .rounded(px(9.0))
+                                .border_1()
+                                .border_color(rgb(theme().border))
+                                .bg(rgb(theme().surface))
+                                .when(is_focused, |field| {
+                                    field.border_color(rgb(theme().search_focus_border))
+                                })
+                                .cursor(CursorStyle::IBeam)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Some(picker) = this.picker.as_ref() {
+                                        window.focus(&picker.search.read(cx).focus_handle(cx));
+                                        cx.notify();
+                                    }
+                                }))
+                                .flex()
+                                .items_center()
+                                .px(px(11.0))
+                                .gap(px(8.0))
+                                .child(
+                                    svg()
+                                        .path("search.svg")
+                                        .size(px(14.0))
+                                        .flex_none()
+                                        .text_color(rgb(theme().text_tertiary)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .overflow_hidden()
+                                        .flex()
+                                        .items_center()
+                                        .text_size(px(12.0))
+                                        .child(picker.search.clone()),
+                                )
+                                .when(!query.is_empty(), |bar| {
+                                    bar.child(
+                                        div()
+                                            .id("clear-search")
+                                            .flex_none()
+                                            .size(px(16.0))
+                                            .rounded_full()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_color(rgb(theme().text_tertiary))
+                                            .cursor(CursorStyle::PointingHand)
+                                            .hover(|style| {
+                                                style.text_color(rgb(theme().text_primary))
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                if let Some(picker) = this.picker.as_ref() {
+                                                    let search = picker.search.clone();
+                                                    let handle = search.read(cx).focus_handle(cx);
+                                                    window.focus(&handle);
+                                                    search.update(cx, |input, cx| input.clear(cx));
+                                                }
+                                            }))
+                                            .child(
+                                                svg()
+                                                    .path("close.svg")
+                                                    .size(px(11.0))
+                                                    .text_color(rgb(theme().text_tertiary)),
+                                            ),
+                                    )
+                                }),
+                        )
+                    })
+                    .child(if picker.lookup.is_some() {
+                        secondary_button(
+                            "picker-lookup-back",
+                            "Back to browsing",
+                            146.0,
+                            cx.listener(|this, _, window, cx| this.close_lookup(window, cx)),
+                        )
+                    } else {
+                        secondary_button(
+                            "picker-lookup-open",
+                            "Look up by ID",
+                            128.0,
+                            cx.listener(|this, _, window, cx| this.open_lookup(window, cx)),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn render_lookup(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(lookup) = self
+            .picker
+            .as_ref()
+            .and_then(|picker| picker.lookup.as_ref())
+        else {
+            return div().into_any_element();
+        };
+
+        let resolving = matches!(lookup.status, LookupStatus::Resolving);
+
+        div()
+            .flex_1()
+            .w_full()
+            .px(px(24.0))
+            .py(px(20.0))
+            .flex()
+            .flex_col()
+            .gap(px(14.0))
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(rgb(theme().text_tertiary))
                     .child(
-                        svg()
-                            .path("search.svg")
-                            .size(px(14.0))
+                        "Open the game on roblox.com and copy the address, for example https://www.roblox.com/games/84515722934860/Anime-Expeditions",
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .id("lookup-field")
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .h(px(36.0))
+                            .rounded(px(9.0))
+                            .border_1()
+                            .border_color(rgb(theme().border))
+                            .bg(rgb(theme().surface))
+                            .cursor(CursorStyle::IBeam)
+                            .flex()
+                            .items_center()
+                            .px(px(12.0))
+                            .text_size(px(12.5))
+                            .child(lookup.input.clone()),
+                    )
+                    .child(primary_button(
+                        "lookup-resolve",
+                        if resolving { "Looking up" } else { "Look up" },
+                        104.0,
+                        cx.listener(|this, _, _, cx| this.resolve_lookup(cx)),
+                    )),
+            )
+            .child(self.render_lookup_status(cx))
+            .into_any_element()
+    }
+
+    fn render_lookup_status(&self, _cx: &mut Context<Self>) -> AnyElement {
+        let Some(lookup) = self
+            .picker
+            .as_ref()
+            .and_then(|picker| picker.lookup.as_ref())
+        else {
+            return div().into_any_element();
+        };
+
+        match &lookup.status {
+            LookupStatus::Idle => div().into_any_element(),
+            LookupStatus::Resolving => div()
+                .mt(px(6.0))
+                .text_size(px(12.0))
+                .text_color(rgb(theme().text_tertiary))
+                .child("Asking Roblox about that game")
+                .into_any_element(),
+            LookupStatus::Failed(reason) => div()
+                .mt(px(6.0))
+                .text_size(px(12.0))
+                .text_color(rgb(theme().danger_text))
+                .child(reason.clone())
+                .into_any_element(),
+            LookupStatus::Found(game) => {
+                let image = self.icon_cache.get(&game.universe_id).cloned();
+                let players = game.player_count;
+
+                div()
+                    .mt(px(4.0))
+                    .w_full()
+                    .p(px(14.0))
+                    .rounded(px(12.0))
+                    .border_1()
+                    .border_color(rgb(theme().card_selected_border))
+                    .bg(rgb(theme().inset_surface))
+                    .flex()
+                    .items_center()
+                    .gap(px(14.0))
+                    .child(
+                        div()
+                            .size(px(72.0))
                             .flex_none()
-                            .text_color(rgb(theme().text_tertiary)),
+                            .rounded(px(9.0))
+                            .overflow_hidden()
+                            .bg(rgb(theme().surface))
+                            .when_some(image, |slot, image| {
+                                slot.child(
+                                    img(image)
+                                        .size_full()
+                                        .object_fit(ObjectFit::Cover)
+                                        .rounded(px(9.0)),
+                                )
+                            }),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .overflow_hidden()
                             .flex()
-                            .items_center()
-                            .text_size(px(12.0))
-                            .child(picker.search.clone()),
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .text_size(px(14.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .line_clamp(2)
+                                    .child(SharedString::from(game.name.clone())),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(rgb(theme().text_tertiary))
+                                    .child(SharedString::from(format!("{players} playing now"))),
+                            ),
                     )
-                    .when(!query.is_empty(), |bar| {
-                        bar.child(
-                            div()
-                                .id("clear-search")
-                                .flex_none()
-                                .size(px(16.0))
-                                .rounded_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_color(rgb(theme().text_tertiary))
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(|style| style.text_color(rgb(theme().text_primary)))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    if let Some(picker) = this.picker.as_ref() {
-                                        let search = picker.search.clone();
-                                        let handle = search.read(cx).focus_handle(cx);
-                                        window.focus(&handle);
-                                        search.update(cx, |input, cx| input.clear(cx));
-                                    }
-                                }))
-                                .child(
-                                    svg()
-                                        .path("close.svg")
-                                        .size(px(11.0))
-                                        .text_color(rgb(theme().text_tertiary)),
-                                ),
-                        )
-                    }),
-            )
-            .into_any_element()
+                    .into_any_element()
+            }
+        }
     }
 
     fn render_picker_footer(&self, has_selection: bool, cx: &mut Context<Self>) -> AnyElement {

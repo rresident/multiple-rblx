@@ -101,6 +101,23 @@ mod tests {
     }
 
     #[test]
+    fn digits_in_the_title_slug_are_never_mistaken_for_the_place_id() {
+        assert_eq!(
+            parse_place_reference("https://www.roblox.com/games/84515722934860/Anime-Expeditions"),
+            Some(84515722934860)
+        );
+        assert_eq!(
+            parse_place_reference("https://www.roblox.com/games/606849621/Jailbreak-update-2"),
+            Some(606849621),
+            "the trailing 2 belongs to the title, not the id"
+        );
+        assert_eq!(
+            parse_place_reference("https://www.roblox.com/games/920587237/Adopt-Me-2026"),
+            Some(920587237)
+        );
+    }
+
+    #[test]
     fn ordinary_search_text_is_not_mistaken_for_an_id() {
         assert_eq!(parse_place_reference("obby"), None);
         assert_eq!(parse_place_reference("2"), None);

@@ -1,6 +1,6 @@
 [package]
 name = "multiple-rblx"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 build = "build.rs"
 description = "Run multiple Roblox accounts at the same time"
